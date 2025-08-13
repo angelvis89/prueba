@@ -7,6 +7,8 @@ import subprocess
 import webbrowser
 import os
 import socket
+import sys
+import ctypes
 import keyboard
 
 ADMIN_PASSWORD = "1234"
@@ -24,14 +26,28 @@ class KioskApp(tk.Tk):
         self.time_left = 300
         self.is_locked = False
         self.protocol('WM_DELETE_WINDOW', lambda: None)
+        self.bind_all('<Alt-F4>', lambda e: 'break')
         self.create_widgets()
         self.admin_password = ADMIN_PASSWORD
         self.admin_combo = ADMIN_COMBO
         self.keyboard_blocked = False
         self.internet_blocked = False
+        self.hook = None
+        self.admin_invoked = False
+        self.check_admin()
         self.apply_restrictions()
         threading.Thread(target=self.start_server, daemon=True).start()
         self.after(1000, self.update_timer)
+
+    def check_admin(self):
+        if os.name == 'nt':
+            try:
+                if not ctypes.windll.shell32.IsUserAnAdmin():
+                    messagebox.showerror('Permiso requerido', 'Ejecute como administrador')
+                    self.destroy()
+                    sys.exit(1)
+            except Exception:
+                pass
 
     def create_widgets(self):
         self.timer_label = tk.Label(self, text='Tiempo restante: 05:00', font=('Arial', 24))
@@ -113,21 +129,25 @@ class KioskApp(tk.Tk):
         self.destroy()
 
     def block_keyboard(self):
+        if self.keyboard_blocked:
+            return
         # registrar combinación de administración y bloquear el resto de teclas
         self.combo_keys = [k.strip() for k in self.admin_combo.split('+')]
-        self.hotkey = keyboard.add_hotkey(self.admin_combo, lambda: self.show_admin_menu(), suppress=True)
-        keyboard.hook(self._keyboard_blocker)
+        self.hook = keyboard.hook(self._keyboard_blocker, suppress=True)
+        self.admin_invoked = False
         self.keyboard_blocked = True
 
     def _keyboard_blocker(self, event):
-        if all(keyboard.is_pressed(k) for k in self.combo_keys):
-            return
-        event.suppress = True
+        if not self.admin_invoked and event.event_type == 'down' and all(keyboard.is_pressed(k) for k in self.combo_keys):
+            self.admin_invoked = True
+            self.after(0, self.show_admin_menu)
 
     def unblock_keyboard(self):
-        keyboard.unhook_all()
-        keyboard.clear_all_hotkeys()
+        if not self.keyboard_blocked:
+            return
+        keyboard.unhook(self.hook)
         self.keyboard_blocked = False
+        self.admin_invoked = False
 
     def toggle_keyboard(self):
         if self.keyboard_blocked:
@@ -145,7 +165,7 @@ class KioskApp(tk.Tk):
         ]
         for cmd in rules:
             try:
-                subprocess.run(cmd, check=False)
+                subprocess.run(cmd, check=False, capture_output=True)
             except Exception:
                 pass
         self.internet_blocked = True
@@ -159,7 +179,7 @@ class KioskApp(tk.Tk):
         ]
         for cmd in rules:
             try:
-                subprocess.run(cmd, check=False)
+                subprocess.run(cmd, check=False, capture_output=True)
             except Exception:
                 pass
         self.internet_blocked = False
